@@ -1,48 +1,53 @@
 import cv2
 import os
 import hashlib
-import uuid
+import random
 
 def xor_encrypt(message, key):
     return ''.join(chr(ord(ch) ^ ord(key[i % len(key)])) for i, ch in enumerate(message))
 
 def encrypt_message(image_path, message, password):
-    # Load the source image
+    # Load the image
     img = cv2.imread(image_path)
     if img is None:
-        return "Error: Source image not found.", None
+        return "Error: Source image not found."
     
-    # Hash the password so it isn’t stored in plain text
-    hashed_password = hashlib.sha256(password.encode()).hexdigest()
+    # Generate a unique 8-character encryption ID (hexadecimal)
+    encryption_id = "{:08x}".format(random.getrandbits(32))
+    
+    # Create a verification token: first 8 characters of SHA-256 hash of the password
+    verification_token = hashlib.sha256(password.encode()).hexdigest()[:8]
     
     # Encrypt the message using XOR encryption
     encrypted_msg = xor_encrypt(message, password)
-    message_length = len(encrypted_msg)
     
-    # Flatten the image to embed the data sequentially
+    # Create header:
+    # "STEG" (4 chars) + encryption_id (8 chars) + message length (8-digit zero-padded) + verification token (8 chars)
+    msg_length = str(len(encrypted_msg)).zfill(8)
+    header = "STEG" + encryption_id + msg_length + verification_token  # Total header length = 28
+    
+    total_data = header + encrypted_msg
+    
+    # Flatten the image array to embed data sequentially
     flat_img = img.flatten()
-    if message_length > len(flat_img):
-        return "Error: Image is too small to hold the message.", None
     
-    # Embed the encrypted message into the flattened image
-    for i, ch in enumerate(encrypted_msg):
+    if len(total_data) > len(flat_img):
+        return "Error: Image is too small to hold the message."
+    
+    # Embed the header and encrypted message into the image pixels
+    for i, ch in enumerate(total_data):
         flat_img[i] = ord(ch)
     
-    # Reshape the image back to its original dimensions
+    # Reshape back to original image shape and save the output image
     img = flat_img.reshape(img.shape)
-    
-    # Generate a unique encryption ID (hex string)
-    enc_id = uuid.uuid4().hex
-    output_image_path = f"encrypted_{enc_id}.png"
-    
-    # Save the encrypted image
+    output_image_path = "encryptedImage.png"
     cv2.imwrite(output_image_path, img)
     
-    # Save metadata (hashed password and message length) in a separate file
-    metadata_filename = f"metadata_{enc_id}.txt"
-    with open(metadata_filename, "w") as f:
-        f.write(hashed_password + "\n")
-        f.write(str(message_length))
+    # Store the encryption ID and the hashed password in a separate file (append mode)
+    hashed_password = hashlib.sha256(password.encode()).hexdigest()
+    db_entry = encryption_id + "," + hashed_password + "\n"
+    with open("encryption_db.txt", "a") as db_file:
+        db_file.write(db_entry)
     
-    # Return the encryption ID and the output image path
-    return enc_id, output_image_path
+    # Return both the encryption ID and the output image path
+    return encryption_id, output_image_path
